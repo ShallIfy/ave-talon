@@ -14,7 +14,7 @@ SCAN → DETECT → RESEARCH → ALERT
 
 1. **SCAN** — Fetches graduated pump.fun tokens from Ave API, builds snapshots (holder data, klines, volume)
 2. **DETECT** — Classifies each token across 5 dimensions (holder growth, top10 concentration, real money, volume, price) into 10 signal patterns
-3. **RESEARCH** — For ENTRY signals: searches Twitter/X via xpoz MCP for real tweets, generates AI narrative synthesis
+3. **RESEARCH** — For ENTRY signals: searches Twitter/X via internal MCP for real tweets, generates AI narrative synthesis
 4. **ALERT** — Persists research to DB, pushes to terminal feed, sends Telegram notifications
 
 ## Signal Matrix
@@ -39,7 +39,7 @@ SCAN → DETECT → RESEARCH → ALERT
 | Framework | Next.js 16 (App Router) |
 | Chain Data | Ave API (internal + public) |
 | Signal Detection | Custom 5-dim x 10-pattern classifier |
-| Twitter Research | xpoz MCP (real tweets) + AI narrative |
+| Twitter Research | Internal MCP (real tweets) + AI narrative |
 | Database | PostgreSQL via Prisma |
 | Notifications | Telegram Bot API |
 | UI | Tailwind CSS, Geist Mono |
@@ -58,7 +58,7 @@ src/
     ├── ave/               # Ave API client (snapshot, klines, holders)
     ├── signals/           # 5-dim signal detection + pattern classification
     ├── orchestrator/      # Autonomous scan loop (scheduler, engine, dedup)
-    ├── twitter/           # xpoz MCP client + narrative research
+    ├── twitter/           # Internal MCP client + narrative research
     ├── telegram/          # Alert notifications
     └── agent/             # AI reasoning engine + tools
 ```
@@ -84,7 +84,7 @@ pnpm dev
 ## Features
 
 - **Real-time signal detection** — 3-minute scan cycles, 5 dimensions, 10 patterns
-- **Twitter research** — Real tweets via xpoz MCP with clickable @username links
+- **Twitter research** — Real tweets via internal MCP with clickable @username links
 - **AI narrative synthesis** — Generates crypto analyst-style summaries from signal + tweet data
 - **Research persistence** — Unique per token (CA), survives server restarts
 - **Terminal feed** — Card-based AI research feed with signal breakdowns
