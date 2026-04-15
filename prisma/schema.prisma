@@ -1,0 +1,256 @@
+// Ave Talon — Solana trading signal agent schema
+// Postgres backend. Observer-only MVP (no hot wallet key handling yet).
+
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// =============================================================================
+// TOKEN CORE
+// =============================================================================
+
+model Token {
+  mint           String   @id
+  symbol         String?
+  name           String?
+  decimals       Int      @default(9)
+  logoUrl        String?
+  firstSeenAt    DateTime @default(now())
+  lastScannedAt  DateTime @updatedAt
+  devAddress     String?
+  riskScore      Int?     // 0-100 composite
+  totalSupply    String?  // stored as string to avoid float precision
+  graduated      Boolean  @default(false)
+
+  signals        Signal[]
+  scanResults    ScanResult[]
+  watchlistItems WatchlistItem[]
+  snapshots      TokenSnapshot[]
+  trades         Trade[]
+  research       Research?
+
+  @@index([lastScannedAt])
+  @@index([graduated])
+}
+
+// =============================================================================
+// SNAPSHOTS (time-series)
+// =============================================================================
+
+model TokenSnapshot {
+  id          String   @id @default(cuid())
+  tokenMint   String
+  token       Token    @relation(fields: [tokenMint], references: [mint], onDelete: Cascade)
+  capturedAt  DateTime @default(now())
+
+  priceUsd    Float
+  mcapUsd     Float
+  volume1h    Float?
+  volume24h   Float?
+  liquidityUsd Float?
+
+  holderCount Int?
+  top10Ratio  Float?   // fraction 0..1
+  holdersGt10 Int?     // count of holders with >$10 balance
+
+  raw         Json     // full Ave response blob
+
+  @@index([tokenMint, capturedAt])
+  @@index([capturedAt])
+}
+
+// =============================================================================
+// SIGNALS (5-dim × 10-pattern detection results)
+// =============================================================================
+
+model Signal {
+  id          String   @id @default(cuid())
+  tokenMint   String
+  token       Token    @relation(fields: [tokenMint], references: [mint], onDelete: Cascade)
+
+  patternId   Int      // 1..10 from architecture.md matrix
+  patternName String   // human readable, e.g. "holder_breakout"
+  dimension   String   // holder_growth | top10_delta | holders_gt10 | volume | price
+  confidence  String   // LOW | MEDIUM | HIGH
+  score       Float    // 0..100
+
+  source      String   @default("manual")  // orchestrator | manual | chat
+  cycleId     String?  // orchestrator cycle id (if source=orchestrator)
+
+  detectedAt  DateTime @default(now())
+  meta        Json     // raw values that triggered (before/after, delta, window)
+
+  snapshot    SignalSnapshot?
+
+  @@index([tokenMint, detectedAt])
+  @@index([confidence, detectedAt])
+  @@index([patternId, detectedAt])
+  @@index([source, detectedAt])
+}
+
+// Slim snapshot of the 5 dimensions at detection time + outcome tracking.
+// This is the material for backtesting / pattern accuracy scoring.
+// Full time-series stays live in the Ave API — we only store what's needed
+// to (a) reproduce the classification and (b) measure actual outcome.
+model SignalSnapshot {
+  id        String   @id @default(cuid())
+  signalId  String   @unique
+  signal    Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+
+  // 5-dim scores at detect time
+  dimHolderGrowth   Float
+  dimTop10Delta     Float
+  dimRealMoney      Float
+  dimVolumeMultiple Float
+  dimPriceChange    Float
+
+  // Raw snapshot context
+  priceUsd    Float
+  mcapUsd     Float?
+  holderCount Int?
+  top10Ratio  Float?
+  holdersGt10 Int?
+
+  // Outcome tracking — filled in later by scheduled followup jobs
+  priceAt1h       Float?
+  priceAt4h       Float?
+  priceAt24h      Float?
+  mcapAt1h        Float?
+  mcapAt4h        Float?
+  mcapAt24h       Float?
+  outcomeScore    Float?  // +pnl if hypothetical long entry, -pnl for short
+  outcomeAt       DateTime?
+
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// =============================================================================
+// SCANNER RESULTS (ranked lists: trending / graduated / new / gainers)
+// =============================================================================
+
+model ScanResult {
+  id         String   @id @default(cuid())
+  source     String   // trending | graduated | new | gainers
+  tokenMint  String
+  token      Token    @relation(fields: [tokenMint], references: [mint], onDelete: Cascade)
+  rank       Int
+  scannedAt  DateTime @default(now())
+  meta       Json
+
+  @@index([source, scannedAt])
+  @@index([tokenMint])
+}
+
+// =============================================================================
+// WATCHLIST
+// =============================================================================
+
+model Watchlist {
+  id        String          @id @default(cuid())
+  owner     String          // wallet address (base58)
+  name      String          @default("Default")
+  createdAt DateTime        @default(now())
+  items     WatchlistItem[]
+
+  @@index([owner])
+}
+
+model WatchlistItem {
+  id          String    @id @default(cuid())
+  watchlistId String
+  watchlist   Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+  tokenMint   String
+  token       Token     @relation(fields: [tokenMint], references: [mint], onDelete: Cascade)
+  addedAt     DateTime  @default(now())
+  note        String?
+
+  @@unique([watchlistId, tokenMint])
+  @@index([tokenMint])
+}
+
+// =============================================================================
+// TRADES (Observer mode: proposed/signed/confirmed — backend never signs)
+// =============================================================================
+
+model Trade {
+  id            String    @id @default(cuid())
+  owner         String    // wallet address
+  tokenMint     String
+  token         Token     @relation(fields: [tokenMint], references: [mint], onDelete: Cascade)
+
+  side          String    // buy | sell
+  amountIn      Float
+  amountOut     Float
+  tokenInMint   String    // SOL (So111...) or SPL mint
+  tokenOutMint  String
+  priceUsd      Float
+  slippageBps   Int
+
+  txSignature   String?   @unique
+  status        String    // proposed | signed | confirmed | failed
+  proposedAt    DateTime  @default(now())
+  confirmedAt   DateTime?
+  failedReason  String?
+
+  jupiterQuote  Json      // stored full quote response for audit
+
+  @@index([owner, proposedAt])
+  @@index([tokenMint])
+  @@index([status])
+}
+
+// =============================================================================
+// RESEARCH (AI narrative + Twitter data, unique per token CA)
+// =============================================================================
+
+model Research {
+  id        String   @id @default(cuid())
+  mint      String   @unique
+  token     Token    @relation(fields: [mint], references: [mint], onDelete: Cascade)
+
+  symbol    String?
+  signalId  String?  // signal that triggered the research
+  patternId Int?
+  patternName String?
+  action    String?  // ENTRY | EXIT | etc.
+  score     Float?
+  confidence String?
+
+  narrative String   @db.Text
+  tweets    Json     @default("[]") // TweetData[]
+  source    String   @default("ai") // "xpoz" | "ai"
+
+  priceUsd  Float?
+  mcapUsd   Float?
+  reasoning String?  @db.Text
+  dimensions Json?   // { holderGrowth, top10Concentration, ... }
+  holderCount Int?
+  telegramSent Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// =============================================================================
+// AGENT LOGS (persistent terminal log across cycles)
+// =============================================================================
+
+model AgentLog {
+  id        String   @id @default(cuid())
+  cycleId   String?
+  phase     String   // observe | decide | act | system
+  kind      String   // system | info | tx-pending | tx-confirming | tx-success | tx-failed | warning | error
+  message   String
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([cycleId])
+}
