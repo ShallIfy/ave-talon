@@ -491,7 +491,33 @@ export class OrchestratorEngine {
       // DB check failed — proceed with fresh research
     }
 
-    // 2. Twitter research (xpoz real tweets + Claude narrative)
+    // 2. Telegram notification — FIRST, no waiting for research
+    try {
+      telegramSent = await sendSignalAlert({
+        symbol: params.symbol,
+        mint,
+        patternId: params.patternId,
+        patternName: params.patternName,
+        confidence: params.confidence,
+        score: params.score,
+        action: params.action,
+        reasoning: params.reasoning,
+        priceUsd: params.priceUsd,
+        mcapUsd: params.mcapUsd,
+        dimensions: params.dimensions,
+        holderCount: params.holderCount,
+      });
+      if (telegramSent) {
+        pushOrchestratorLine("telegram", `${short} alert sent`);
+      }
+    } catch (err) {
+      pushOrchestratorLine(
+        "warning",
+        `telegram send failed: ${String(err).slice(0, 100)}`,
+      );
+    }
+
+    // 3. Twitter research (xpoz real tweets + Claude narrative) — after TG
     try {
       pushOrchestratorLine("twitter", `researching $${short}…`);
       const research = await researchTokenNarrative({
@@ -513,33 +539,6 @@ export class OrchestratorEngine {
       pushOrchestratorLine(
         "warning",
         `twitter research failed: ${String(err).slice(0, 100)}`,
-      );
-    }
-
-    // 3. Telegram notification
-    try {
-      telegramSent = await sendSignalAlert({
-        symbol: params.symbol,
-        mint,
-        patternId: params.patternId,
-        patternName: params.patternName,
-        confidence: params.confidence,
-        score: params.score,
-        action: params.action,
-        reasoning: params.reasoning,
-        priceUsd: params.priceUsd,
-        mcapUsd: params.mcapUsd,
-        narrative: narrative || undefined,
-        dimensions: params.dimensions,
-        holderCount: params.holderCount,
-      });
-      if (telegramSent) {
-        pushOrchestratorLine("telegram", `${short} alert sent`);
-      }
-    } catch (err) {
-      pushOrchestratorLine(
-        "warning",
-        `telegram send failed: ${String(err).slice(0, 100)}`,
       );
     }
 
