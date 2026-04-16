@@ -91,12 +91,20 @@ async function researchViaXpoz(params: {
 }): Promise<NarrativeResult> {
   const sym = params.symbol ?? params.mint.slice(0, 8);
 
-  // Search for tweets about this token
-  const query = `${sym} OR "$${sym}" solana OR ${params.mint.slice(0, 8)}`;
+  // Search for tweets about this token — use CA prefix for specificity
+  const query = `$${sym} OR ${params.mint.slice(0, 12)}`;
   const xpozResult: XpozResult = await searchTweets(query, 20);
 
+  // Filter tweets that actually mention this token (symbol or CA prefix)
+  const symLower = sym.toLowerCase();
+  const caPrefix = params.mint.slice(0, 8).toLowerCase();
+  const relevant = xpozResult.tweets.filter((t) => {
+    const lower = t.text.toLowerCase();
+    return lower.includes(symLower) || lower.includes(`$${symLower}`) || lower.includes(caPrefix);
+  });
+
   // Sort by impressions/likes descending, take top 5
-  const topTweets = xpozResult.tweets
+  const topTweets = relevant
     .sort((a, b) => b.likeCount - a.likeCount)
     .slice(0, 5);
 
@@ -108,14 +116,14 @@ async function researchViaXpoz(params: {
     createdAt: t.createdAtDate,
   }));
 
-  // Generate narrative using Claude, passing raw xpoz text for full context
+  // Generate narrative — pass raw text only if we found relevant tweets
   const narrative = await generateNarrativeFromTweets(
     params,
     tweets,
-    xpozResult.rawText,
+    relevant.length > 0 ? xpozResult.rawText : "",
   );
 
-  return { narrative, tweets, source: "xpoz" };
+  return { narrative, tweets, source: relevant.length > 0 ? "xpoz" : "ai" };
 }
 
 // ── Claude narrative from real tweets ────────────────────────────────
@@ -154,7 +162,7 @@ async function generateNarrativeFromTweets(
           .join("\n")
       : "No relevant tweets found.";
 
-  const prompt = `You are a crypto analyst summarizing Twitter/X discussion about $${sym} on Solana. Based on the signal data and real tweets below, write a 2-3 sentence narrative about what CT (crypto Twitter) is saying about this token. Reference specific @usernames and tweet content when relevant.
+  const prompt = `You are a crypto analyst writing a brief market take on $${sym} (Solana memecoin). Use the signal data below as your primary source. If the tweets contain relevant discussion about $${sym}, reference them. If not, ignore the tweets entirely and write based on signal data alone.
 
 Signal data:
 - Token: $${sym}
@@ -165,11 +173,12 @@ Signal data:
 ${tweetSection}
 
 Rules:
-- 2-3 sentences max, full English only
-- Reference specific @usernames and metrics from the tweets
-- Use natural crypto Twitter (CT) degen slang
+- 2-3 sentences max, English only
+- Write as a confident crypto analyst — state what the on-chain data shows
+- NEVER say "no tweets found" or "no discussion" or "search results don't contain" — just write about the signal
+- Reference @usernames ONLY if tweets are actually about $${sym}
+- Use natural CT degen language
 - No emojis, no hashtags
-- Sound like a human analyst summarizing real Twitter discussion
 
 Write the narrative:`;
 
